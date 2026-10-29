@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pax Clock Operator</title>
+<style>
+  :root { --bg:#0a0a0c; --panel:#131317; --line:#26262d; --text:#d6d6de; --dim:#74747f; --go:#1f7a3f; --cur:#3a2f66; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 -apple-system,system-ui,sans-serif; height:100vh; display:grid; grid-template-rows:auto 1fr; }
+  header { display:flex; gap:10px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header .grow { flex:1; }
+  button { background:#1d1d23; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:7px 12px; font:inherit; cursor:pointer; }
+  button:hover { border-color:#444; }
+  .pill { font-size:12px; color:var(--dim); border:1px solid var(--line); border-radius:99px; padding:3px 10px; }
+  .pill.ok { color:#8fd19e; border-color:#2c5a39; }
+  .pill.bad { color:#e39a8f; border-color:#6a3029; }
+  main { display:grid; grid-template-columns:1.3fr 1fr; gap:14px; padding:14px; min-height:0; }
+  .col { display:flex; flex-direction:column; gap:12px; min-height:0; }
+  #preview { width:100%; aspect-ratio:16/9; background:#000; border:1px solid var(--line); border-radius:6px; display:block; }
+  .box { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  .label { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); }
+  #now { font-size:26px; font-weight:600; margin:2px 0; }
+  #nowNote, #nextNote { color:var(--dim); }
+  #timer { font-variant-numeric:tabular-nums; color:var(--dim); float:right; font-size:13px; }
+  #next { font-size:18px; margin:2px 0; }
+  #go { width:100%; padding:22px; font-size:24px; font-weight:700; background:var(--go); border-color:#2c9a55; color:#fff; }
+  #go:disabled { opacity:.35; cursor:default; }
+  ol { list-style:none; margin:0; padding:0; overflow:auto; }
+  li { display:flex; gap:10px; padding:7px 10px; border-radius:6px; cursor:pointer; color:var(--dim); }
+  li:hover { background:#1a1a20; }
+  li.cur { background:var(--cur); color:#fff; }
+  li.next { color:var(--text); }
+  li kbd { width:18px; text-align:center; opacity:.7; }
+  .sliders { display:grid; grid-template-columns:auto 1fr auto; gap:6px 10px; align-items:center; font-size:12px; color:var(--dim); }
+  input[type=range] { width:100%; }
+  .keys { font-size:12px; color:var(--dim); }
+  kbd { font:12px ui-monospace,monospace; }
+</style>
+</head>
+<body>
+<header>
+  <button id="openProj">Open projector window</button>
+  <span id="projState" class="pill bad">Projector: closed</span>
+  <span id="audioState" class="pill bad">Audio: press any key to arm</span>
+  <span class="grow"></span>
+  <button id="mute">Mute (M)</button>
+</header>
+<main>
+  <div class="col">
+    <canvas id="preview"></canvas>
+    <div class="box sliders">
+      <span>Size</span><input type="range" id="size" min="0.3" max="1.4" step="0.01"><span id="sizeV"></span>
+      <span>Move X</span><input type="range" id="x" min="-0.4" max="0.4" step="0.005"><span id="xV"></span>
+      <span>Move Y</span><input type="range" id="y" min="-0.4" max="0.4" step="0.005"><span id="yV"></span>
+      <span>Brightness</span><input type="range" id="bright" min="0.1" max="1" step="0.01"><span id="brightV"></span>
+      <span>SFX volume</span><input type="range" id="vol" min="0" max="1" step="0.01"><span id="volV"></span>
+    </div>
+    <div class="keys">
+      <kbd>Space</kbd> / <kbd>→</kbd> / <kbd>PgDn</kbd> GO &nbsp;·&nbsp; <kbd>←</kbd> / <kbd>PgUp</kbd> back (silent) &nbsp;·&nbsp;
+      <kbd>1</kbd>–<kbd>8</kbd> jump to cue (silent) &nbsp;·&nbsp; <kbd>M</kbd> mute &nbsp;·&nbsp;
+      in projector window: double-click or <kbd>F</kbd> for fullscreen
+    </div>
+  </div>
+  <div class="col">
+    <div class="box">
+      <div class="label">Now <span id="timer">0:00</span></div>
+      <div id="now"></div>
+      <div id="nowNote"></div>
+    </div>
+    <button id="go">GO</button>
+    <div class="box">
+      <div class="label">Next</div>
+      <div id="next"></div>
+      <div id="nextNote"></div>
+    </div>
+    <div class="box" style="min-height:0;display:flex;flex-direction:column"><ol id="list"></ol></div>
+  </div>
+</main>
+<script>
+// ===== Show settings: tune these at tech rehearsal =====
+const CONFIG = {
+  startTime: 10*3600 + 9*60 + 30,   // time on the face at curtain up (10:09:30)
+  slowFactor: 0.4,                  // slow-mo ticks at 40% speed (60% slower): one tick every 2.5 s
+  rewindDoubleEvery: 1.6,           // rewind speed doubles every N seconds...
+  rewindMax: 300,                   // ...up to this many clock-seconds per real second
+  colors: { NORMAL:[255,250,240], REWIND:[255,250,240], PURPLE:[178,118,255], FREEZE:[168,205,255] },
+  colorFade: 0.25,                  // seconds for the colour shift into purple and blue
+  glitch: { every:[0.5, 1.8],       // seconds between glitch bursts in the purple state (random in range)
+            length:[0.12, 0.45],    // how long each burst lasts
+            micro:0.07,             // chance per frame of a tiny glitch between bursts (0 = none)
+            strength:1 },           // overall glitch strength: 0.5 = subtler, 1.5 = heavier
+  warp: { amp:0.02, ramp:0.3 },     // blue freeze waviness: amp = peak sideways shift as a share of screen height, ramp = seconds to fade in/out
+  sfx: { rewind:0.5, stopHit:0.8, slowTick:0.7, glitch:0.16, freezeHit:0.8, drone:0.22, release:0.35 },
+};
+// Cue sheet. Edit `note` with your script lines or lighting cue numbers.
+const CUES = [
+  { id:'NORMAL', name:'Pre-show · Normal',       note:'White, ticking clockwise, silent.' },
+  { id:'REWIND', name:'Distortion 1 · Rewind',   note:'Spins anticlockwise and keeps speeding up. Press GO to stop it on the music.' },
+  { id:'PURPLE', name:'Distortion 1 · Slow-mo',  note:'Hard stop. Purple with glitching, ticking 60% slower with sound.' },
+  { id:'BLACK',  name:'Blackout 1',              note:'Projector goes black. Press with the lighting blackout.' },
+  { id:'NORMAL', name:'Lights up · Normal',      note:'Back to the default clock. Press with the lights-up cue.' },
+  { id:'FREEZE', name:'Distortion 2 · Freeze',   note:'Stops dead with a blue tint, wavy warp and a drone.' },
+  { id:'NORMAL', name:'Resume · Normal',         note:'Drone releases and normal ticking resumes.' },
+  { id:'GONE',   name:'Blackout 2 · Clock gone', note:'Black for the rest of the show.' },
+];
+
+const TAU = Math.PI * 2;
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const rand = (a, b) => a + Math.random() * (b - a);
+
+// ===== Settings saved per laptop (projector framing, volume) =====
+const set = { size:1, x:0, y:0, bright:1, vol:0.8, muted:false };
+try { Object.assign(set, JSON.parse(localStorage.getItem('paxclock') || '{}')); } catch {}
+const save = () => { try { localStorage.setItem('paxclock', JSON.stringify(set)); } catch {} };
+for (const k of ['size', 'x', 'y', 'bright', 'vol']) {
+  const el = $(k);
+  el.value = set[k]; $(k + 'V').textContent = (+set[k]).toFixed(2);
+  el.addEventListener('input', () => { set[k] = +el.value; $(k + 'V').textContent = set[k].toFixed(2); save(); if (k === 'vol') applyVol(); });
+}
+
+// ===== Sound: synthesised with Web Audio, no files needed =====
+let AC, master, verb, noiseBuf;
+function audio() {
+  if (!AC) {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    master = AC.createGain(); master.connect(AC.destination);
+    verb = AC.createConvolver();
+    const len = AC.sampleRate * 3, ir = AC.createBuffer(2, len, AC.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
+    verb.buffer = ir; verb.connect(master);
+    noiseBuf = AC.createBuffer(1, AC.sampleRate * 2, AC.sampleRate);
+    const n = noiseBuf.getChannelData(0); for (let i = 0; i < n.length; i++) n[i] = Math.random() * 2 - 1;
+    applyVol();
+  }
+  if (AC.state !== 'running') AC.resume();
+  return AC;
+}
+function applyVol() { if (master) master.gain.setTargetAtTime(set.muted ? 0 : set.vol, AC.currentTime, 0.02); }
+const gainNode = v => { const g = AC.createGain(); g.gain.value = v; return g; };
+const osc = (type, f) => { const o = AC.createOscillator(); o.type = type; o.frequency.value = f; return o; };
+const filt = (type, f, q = 1) => { const b = AC.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = q; return b; };
+const noise = (loop = false) => { const s = AC.createBufferSource(); s.buffer = noiseBuf; s.loop = loop; return s; };
+function env(g, t, peak, a, d) { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + a + d); }
+function out(node, wet) { node.connect(master); if (wet) node.connect(gainNode(wet)).connect(verb); }
+function shot(src, chain, t, dur) { src.connect(chain); src.start(t); src.stop(t + dur); }
+
+let rw = null, drone = null;
+const sfx = {
+  slowTick(alt) {
+    const v = CONFIG.sfx.slowTick; if (!AC || !v) return; const t = AC.currentTime;
+    const o = osc('triangle', alt ? 150 : 124); o.frequency.exponentialRampToValueAtTime(alt ? 68 : 58, t + 0.6);
+    const g = AC.createGain(); env(g, t, v, 0.003, 0.8); out(g, 0.55); shot(o, g, t, 0.9);
+    const bp = filt('bandpass', alt ? 2300 : 1800, 3), g2 = AC.createGain(); env(g2, t, v * 0.9, 0.001, 0.07);
+    bp.connect(g2); out(g2, 0.45); shot(noise(), bp, t, 0.12);
+  },
+  rewindStart() {
+    const v = CONFIG.sfx.rewind; if (!AC || !v || rw) return;
+    const n = noise(true), bp = filt('bandpass', 300, 1.4), ng = gainNode(0);
+    n.connect(bp).connect(ng); out(ng, 0.2);
+    const r = osc('sawtooth', 1), hp = filt('highpass', 1500), rg = gainNode(0);   // ratchet: one click per second-mark passed
+    r.connect(hp).connect(rg); out(rg, 0.15);
+    n.start(); r.start(); rw = { n, r, bp, ng, rg, v };
+  },
+  rewindUpdate(speed) {
+    if (!rw) return; const t = AC.currentTime, s = clamp(Math.log2(Math.max(speed, 1)) / Math.log2(CONFIG.rewindMax), 0, 1);
+    rw.bp.frequency.setTargetAtTime(300 + 5000 * s * s, t, 0.05);
+    rw.ng.gain.setTargetAtTime(rw.v * (0.08 + 0.6 * s), t, 0.05);
+    rw.r.frequency.setTargetAtTime(Math.max(speed, 1), t, 0.05);
+    rw.rg.gain.setTargetAtTime(rw.v * 0.5, t, 0.05);
+  },
+  rewindStop() {
+    if (!rw) return; const t = AC.currentTime;
+    for (const g of [rw.ng, rw.rg]) { g.gain.cancelScheduledValues(t); g.gain.setTargetAtTime(0, t, 0.008); }
+    rw.n.stop(t + 0.1); rw.r.stop(t + 0.1); rw = null;
+  },
+  stopHit() {
+    const v = CONFIG.sfx.stopHit; if (!AC || !v) return; const t = AC.currentTime;
+    const o = osc('sine', 120); o.frequency.exponentialRampToValueAtTime(38, t + 0.5);
+    const g = AC.createGain(); env(g, t, v, 0.002, 1.1); out(g, 0.6); shot(o, g, t, 1.3);
+    const lp = filt('lowpass', 900), g2 = AC.createGain(); env(g2, t, v * 0.7, 0.001, 0.18);
+    lp.connect(g2); out(g2, 0.6); shot(noise(), lp, t, 0.25);
+  },
+  glitch() {
+    const v = CONFIG.sfx.glitch; if (!AC || !v) return; let t = AC.currentTime;
+    for (let i = 0, n = 2 + (Math.random() * 3 | 0); i < n; i++) {
+      const d = rand(0.012, 0.04), o = osc('square', rand(500, 4000)), g = AC.createGain();
+      env(g, t, v, 0.001, d); out(g, 0.1); shot(o, g, t, d + 0.02); t += d + rand(0, 0.03);
+    }
+  },
+  freezeHit() {
+    const v = CONFIG.sfx.freezeHit; if (!AC || !v) return; const t = AC.currentTime;
+    const o = osc('sine', 70); o.frequency.exponentialRampToValueAtTime(34, t + 1.4);
+    const g = AC.createGain(); env(g, t, v, 0.003, 1.8); out(g, 0.4); shot(o, g, t, 2);
+    const hp = filt('highpass', 3000), g2 = AC.createGain(); env(g2, t, v * 0.5, 0.001, 0.3);
+    hp.connect(g2); out(g2, 0.8); shot(noise(), hp, t, 0.35);
+    for (const f of [1046, 1318, 1568, 2093]) {
+      const s = osc('sine', f * rand(0.997, 1.003)), gs = AC.createGain(); env(gs, t, v * 0.09, 0.01, 3.5);
+      out(gs, 0.9); shot(s, gs, t, 3.6);
+    }
+  },
+  droneStart() {
+    const v = CONFIG.sfx.drone; if (!AC || !v || drone) return; const t = AC.currentTime;
+    const lp = filt('lowpass', 800), g = gainNode(0); lp.connect(g); out(g, 0.5);
+    const oscs = [osc('sine', 110), osc('sine', 110.7), osc('triangle', 220.4)];
+    oscs.forEach(o => { o.connect(lp); o.start(t); });
+    g.gain.setTargetAtTime(v, t, 0.4); drone = { g, oscs };
+  },
+  droneStop(fade) {
+    if (!drone) return; const t = AC.currentTime;
+    drone.g.gain.cancelScheduledValues(t); drone.g.gain.setTargetAtTime(0, t, fade / 3);
+    drone.oscs.forEach(o => o.stop(t + fade + 0.2)); drone = null;
+  },
+  release() {
+    const v = CONFIG.sfx.release; if (!AC || !v) return; const t = AC.currentTime;
+    const bp = filt('bandpass', 3000, 2), g = AC.createGain();
+    bp.frequency.exponentialRampToValueAtTime(300, t + 0.6); env(g, t, v, 0.35, 0.35);
+    bp.connect(g); out(g, 0.5); shot(noise(), bp, t, 0.8);
+  },
+};
+
+// ===== Clock state machine =====
+let cur = 0, cueAt = 0, lastGo = -1;
+let now = performance.now() / 1000, last = now;
+let disp = CONFIG.startTime, prevDisp = disp;    // clock-seconds shown on the face
+let sec = disp, tickAt = -1e9, nextTickAt = 0;  // ticker for NORMAL and PURPLE
+let rewT = 0, vel = 0, nextGlitch = 0, glitchUntil = 0, glitchSfx2 = 0, gl = 0, warpAmt = 0;
+const col = [...CONFIG.colors.NORMAL];
+const isBlack = id => id === 'BLACK' || id === 'GONE';
+
+function startTicker(period) { sec = Math.round(disp); tickAt = -1e9; nextTickAt = now + period; }
+
+function enter(i, forward) {
+  const prev = CUES[cur].id, next = CUES[i].id;
+  if (prev === 'REWIND') sfx.rewindStop();
+  if (prev === 'FREEZE') sfx.droneStop(forward ? 0.8 : 0.1);
+  cur = i; cueAt = now;
+  if (next === 'REWIND') { rewT = 0; vel = 0; sfx.rewindStart(); }
+  if (next === 'PURPLE') { startTicker(1 / CONFIG.slowFactor); nextGlitch = now + 1.5; if (forward) sfx.stopHit(); }
+  if (next === 'NORMAL') { startTicker(1); if (forward && prev === 'FREEZE') sfx.release(); }
+  if (next === 'FREEZE') { sfx.droneStart(); if (forward) sfx.freezeHit(); }
+  if (isBlack(prev) || !forward) col.splice(0, 3, ...(CONFIG.colors[next] || col));   // no visible fade coming out of black
+  ui();
+}
+function go() {
+  const t = performance.now() / 1000;
+  if (t - lastGo < 0.5 || cur >= CUES.length - 1) return;   // ignore accidental double presses
+  lastGo = t; enter(cur + 1, true);
+}
+const back = () => { if (cur > 0) enter(cur - 1, false); };
+
+function update(dt) {
+  const s = CUES[cur].id;
+  prevDisp = disp;
+  if (s === 'NORMAL' || s === 'PURPLE') {
+    const slow = s === 'PURPLE', P = slow ? 1 / CONFIG.slowFactor : 1, D = slow ? 0.32 : 0.08;
+    if (now >= nextTickAt) {
+      sec++; tickAt = now; nextTickAt += P; if (nextTickAt < now) nextTickAt = now + P;
+      if (slow) sfx.slowTick(sec % 2);
+    }
+    const k = clamp((now - tickAt) / D, 0, 1), c = slow ? 2.2 : 1.4;   // ease-out with a little overshoot
+    disp = sec + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2);   // = sec - 1 at k=0, sec at k=1
+    if (slow && now >= nextGlitch) {
+      const G = CONFIG.glitch; glitchUntil = now + rand(...G.length); nextGlitch = glitchUntil + rand(...G.every);
+      sfx.glitch(); glitchSfx2 = glitchUntil - now > 0.25 ? now + 0.12 : 0;
+    }
+    if (glitchSfx2 && now >= glitchSfx2) { glitchSfx2 = 0; sfx.glitch(); }
+    gl = !slow ? 0 : now < glitchUntil ? rand(0.5, 1) : Math.random() < CONFIG.glitch.micro ? rand(0.12, 0.35) : 0;   // re-rolled every frame so bursts stutter
+  } else if (s === 'REWIND') {
+    rewT += dt; vel = -Math.min(CONFIG.rewindMax, Math.pow(2, rewT / CONFIG.rewindDoubleEvery));
+    disp += vel * dt; sfx.rewindUpdate(-vel);
+  }
+  if (s !== 'PURPLE') gl = 0;
+  warpAmt += ((s === 'FREEZE' ? 1 : 0) - warpAmt) * (1 - Math.exp(-dt / (CONFIG.warp.ramp / 3)));
+  const target = CONFIG.colors[s];
+  if (target) { const k = 1 - Math.exp(-dt / (CONFIG.colorFade / 3)); for (let i = 0; i < 3; i++) col[i] += (target[i] - col[i]) * k; }
+}
+
+// ===== Drawing =====
+function line(g, a, r1, r2) { g.beginPath(); g.moveTo(Math.sin(a) * r1, -Math.cos(a) * r1); g.lineTo(Math.sin(a) * r2, -Math.cos(a) * r2); g.stroke(); }
+function drawClock(g, w, h, rgb = col, ox = 0, jit = 0, clear = true) {
+  const R = Math.min(w, h) * 0.42 * set.size, css = `rgb(${rgb[0] | 0},${rgb[1] | 0},${rgb[2] | 0})`, disp0 = disp + jit;
+  if (clear) g.clearRect(0, 0, w, h);
+  g.save(); g.translate(w / 2 + set.x * w + ox, h / 2 + set.y * h);
+  g.strokeStyle = g.fillStyle = g.shadowColor = css; g.shadowBlur = R * 0.06; g.lineCap = 'round';
+  g.lineWidth = R * 0.022; g.beginPath(); g.arc(0, 0, R, 0, TAU); g.stroke();
+  for (let i = 0; i < 60; i++) { const big = i % 5 === 0; g.lineWidth = R * (big ? 0.022 : 0.008); line(g, i / 60 * TAU, R * (big ? 0.82 : 0.89), R * 0.93); }
+  g.lineWidth = R * 0.05; line(g, disp0 / 43200 * TAU, -R * 0.08, R * 0.5);
+  g.lineWidth = R * 0.032; line(g, disp0 / 3600 * TAU, -R * 0.1, R * 0.74);
+  const a = disp0 / 60 * TAU, span = clamp((disp - prevDisp) / 60 * TAU, -5, 5);
+  g.lineWidth = R * 0.012;
+  if (CUES[cur].id === 'REWIND' && Math.abs(span) > 0.05) {     // motion-blur trail at speed
+    for (let j = 7; j >= 0; j--) { g.globalAlpha = 1 - j / 8; line(g, a - span * j / 8, -R * 0.15, R * 0.86); }
+    g.globalAlpha = 1;
+  } else line(g, a, -R * 0.15, R * 0.86);
+  g.beginPath(); g.arc(0, 0, R * 0.035, 0, TAU); g.fill();
+  g.restore();
+}
+function composite(t, black) {
+  const { g, off, warp, wg, w, h } = t;
+  g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1; g.fillStyle = '#000'; g.fillRect(0, 0, w, h);
+  if (black) return;
+  const u = Math.min(w, h) / 400, K = CONFIG.glitch.strength;
+  if (warpAmt > 0.004) {                                        // metamorphopsia: straight lines bend. rows shift sideways, then columns shift up/down
+    const A = CONFIG.warp.amp * h * warpAmt, S = Math.max(2, Math.round(h / 270)), T = now;
+    wg.globalCompositeOperation = 'source-over'; wg.clearRect(0, 0, w, h);
+    for (let y = 0; y < h; y += S) {
+      const n = y / h, dx = A * (0.6 * Math.sin(n * 9 + T * 0.9) + 0.25 * Math.sin(n * 23 - T * 1.7)) * (0.55 + 0.45 * Math.sin(n * 3.1 + T * 0.5));
+      wg.drawImage(off, 0, y, w, S, dx, y, w, S);
+    }
+    g.globalAlpha = set.bright;
+    for (let x = 0; x < w; x += S) {
+      const n = x / w, dy = A * (0.6 * Math.sin(n * 11 - T * 0.8) + 0.25 * Math.sin(n * 27 + T * 1.5)) * (0.55 + 0.45 * Math.sin(n * 2.7 - T * 0.6));
+      g.drawImage(warp, x, 0, S, h, x, dy, S, h);
+    }
+    return;
+  }
+  const purple = CUES[cur].id === 'PURPLE';
+  g.globalAlpha = set.bright * (purple ? rand(0.9, 1) : 1);
+  if (gl === 0) { g.drawImage(off, 0, 0); return; }
+  const f = gl * K;
+  if (Math.random() < 0.18 * f) g.globalAlpha = set.bright * rand(0.15, 0.55);     // brief dropout flicker
+  for (let y = 0; y < h;) {                                     // horizontal slices knocked sideways
+    const sh = Math.ceil(h * rand(0.008, 0.07)), dx = Math.random() < 0.25 + 0.4 * f ? rand(-1, 1) * (6 + 30 * f) * u : 0;
+    g.drawImage(off, 0, y, w, sh, dx, y, w, sh); y += sh;
+  }
+  if (Math.random() < 0.5 * f) {                                // a vertical tear: one strip jumps up or down
+    const x = rand(0, w * 0.8), sw = rand(0.03, 0.18) * w, dy = rand(-1, 1) * 0.12 * h;
+    g.drawImage(off, x, 0, sw, h, x, dy, sw, h);
+  }
+  g.globalCompositeOperation = 'lighter';                       // colour split: cyan one way, magenta the other
+  const d = (2 + 7 * f) * u; g.globalAlpha = set.bright * Math.min(0.6, 0.25 + 0.3 * f);
+  g.drawImage(t.cyan, -d, 0); g.drawImage(t.mag, d, 0);
+  g.globalCompositeOperation = 'source-over'; g.globalAlpha = 0.28 * f; g.fillStyle = '#000';   // scanlines
+  const sl = Math.max(2, Math.round(u * 1.5));
+  for (let y = (Math.random() * sl * 2) | 0; y < h; y += sl * 2) g.fillRect(0, y, w, sl);
+}
+function fit(t, dpr) {
+  const w = Math.round(t.canvas.clientWidth * dpr), h = Math.round(t.canvas.clientHeight * dpr);
+  if (w && h && (t.canvas.width !== w || t.canvas.height !== h)) {
+    for (const c of [t.canvas, t.off, t.warp, t.cyan, t.mag]) { c.width = w; c.height = h; }
+    t.w = w; t.h = h;
+  }
+}
+const makeTarget = canvas => {
+  const mk = () => document.createElement('canvas'), off = mk(), warp = mk(), cyan = mk(), mag = mk();
+  return { canvas, g: canvas.getContext('2d'), off, og: off.getContext('2d'), warp, wg: warp.getContext('2d'), cyan, cg: cyan.getContext('2d'), mag, mg: mag.getContext('2d'), w: 0, h: 0 };
+};
+const preview = makeTarget($('preview'));
+let popup = null, proj = null;
+
+function render() {
+  const black = isBlack(CUES[cur].id);
+  const targets = [[preview, devicePixelRatio]];
+  if (proj && !popup.closed) targets.push([proj, popup.devicePixelRatio]);
+  for (const [t, dpr] of targets) {
+    fit(t, dpr); if (!t.w) continue;
+    if (!black) {
+      drawClock(t.og, t.w, t.h);
+      if (gl) {                                                  // tinted copies for the colour split, hands jittering with the glitch
+        drawClock(t.og, t.w, t.h, col, 0, rand(-3, 3) * gl, true);
+        drawClock(t.cg, t.w, t.h, [40, 230, 255], 0, rand(-2, 2) * gl);
+        drawClock(t.mg, t.w, t.h, [255, 40, 170], 0, rand(-2, 2) * gl);
+      }
+    }
+    composite(t, black);
+  }
+  if (black) {
+    const g = preview.g; g.fillStyle = '#555'; g.font = `${preview.h * 0.05}px system-ui`; g.textAlign = 'center';
+    g.fillText(CUES[cur].id === 'GONE' ? 'CLOCK GONE (projector black)' : 'BLACKOUT (projector black)', preview.w / 2, preview.h / 2);
+  }
+}
+
+// ===== Loop: driven by the projector window when open, so it never stalls if the laptop window is covered =====
+let pending = false;
+function schedule() { if (pending) return; pending = true; ((popup && !popup.closed) ? popup : window).requestAnimationFrame(frame); }
+function frame() {
+  pending = false; now = performance.now() / 1000;
+  const dt = Math.min(0.1, now - last); last = now;
+  update(dt); render(); tickUi(); schedule();
+}
+setInterval(() => { if (performance.now() / 1000 - last > 0.3) { pending = false; schedule(); } }, 250);
+
+// ===== Projector window =====
+function openProjector() {
+  if (popup && !popup.closed) { popup.focus(); return; }
+  popup = window.open('', 'paxclock-projector', 'width=960,height=540');
+  if (!popup) { $('projState').textContent = 'Projector: popup blocked, allow popups'; return; }
+  const d = popup.document;
+  d.open();
+  d.write('<!doctype html><meta charset="utf-8"><title>Pax Clock</title><style>html,body{margin:0;height:100%;background:#000;overflow:hidden;cursor:none}canvas{display:block;width:100vw;height:100vh}</style><canvas></canvas>');
+  d.close();
+  proj = makeTarget(d.querySelector('canvas'));
+  const fs = () => d.fullscreenElement ? d.exitFullscreen() : d.documentElement.requestFullscreen().catch(() => {});
+  d.addEventListener('keydown', e => { if (e.code === 'KeyF') fs(); else onKey(e); });
+  d.addEventListener('dblclick', fs);
+  const lock = () => popup.navigator.wakeLock?.request('screen').catch(() => {});   // stop the Mac dimming mid-show
+  lock(); d.addEventListener('visibilitychange', lock);
+  schedule();
+}
+
+// ===== Operator UI =====
+function onKey(e) {
+  if (e.repeat || e.metaKey || e.ctrlKey) return;
+  audio(); let hit = true;
+  if (['Space', 'ArrowRight', 'PageDown', 'Enter'].includes(e.code)) go();   // presentation clickers send PgDn/PgUp
+  else if (['ArrowLeft', 'PageUp'].includes(e.code)) back();
+  else if (/^Digit[1-8]$/.test(e.code)) enter(+e.code.slice(5) - 1, false);
+  else if (e.code === 'KeyM') toggleMute();
+  else hit = false;
+  if (hit) e.preventDefault();
+}
+function toggleMute() { set.muted = !set.muted; save(); applyVol(); ui(); }
+document.addEventListener('keydown', onKey);
+document.addEventListener('pointerdown', () => audio());
+document.querySelectorAll('button').forEach(b => b.addEventListener('mousedown', e => e.preventDefault()));  // keep focus off buttons so Space never double-fires
+$('go').onclick = () => { audio(); go(); };
+$('openProj').onclick = openProjector;
+$('mute').onclick = toggleMute;
+navigator.wakeLock?.request('screen').catch(() => {});
+
+const list = $('list');
+CUES.forEach((c, i) => {
+  const li = document.createElement('li'); li.innerHTML = `<kbd>${i + 1}</kbd><span>${c.name}</span>`;
+  li.onclick = () => { audio(); enter(i, false); }; list.appendChild(li);
+});
+function ui() {
+  const c = CUES[cur], n = CUES[cur + 1];
+  $('now').textContent = c.name; $('nowNote').textContent = c.note;
+  $('next').textContent = n ? n.name : 'End of cues'; $('nextNote').textContent = n ? n.note : '';
+  $('go').disabled = !n;
+  [...list.children].forEach((li, i) => { li.className = i === cur ? 'cur' : i === cur + 1 ? 'next' : ''; });
+  $('mute').textContent = set.muted ? 'Unmute (M)' : 'Mute (M)';
+}
+let lastUi = '';
+function tickUi() {
+  const t = Math.max(0, now - cueAt), txt = `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+  const open = popup && !popup.closed, a = AC && AC.state === 'running';
+  const key = txt + open + a + set.muted;
+  if (key === lastUi) return; lastUi = key;
+  $('timer').textContent = txt;
+  $('projState').textContent = open ? 'Projector: open' : 'Projector: closed'; $('projState').className = 'pill ' + (open ? 'ok' : 'bad');
+  $('audioState').textContent = !a ? 'Audio: press any key to arm' : set.muted ? 'Audio: MUTED' : 'Audio: armed';
+  $('audioState').className = 'pill ' + (a && !set.muted ? 'ok' : 'bad');
+}
+ui(); schedule();
+</script>
+</body>
+</html>
