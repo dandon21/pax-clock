@@ -20,7 +20,7 @@ The operator presses GO at each cue; the clock projects to a second screen with 
 
 ## Keys
 
-`Space` / `→` / `PgDn` / `Enter` GO · `←` / `PgUp` back · `1`–`8` jump to a cue · `M` mute
+`Space` / `→` / `PgDn` / `Enter` GO · `←` / `PgUp` back · `1`–`8` jump to a cue · `P` Start / Pause / Resume · `M` mute
 
 Back and jump are silent, so fixing a mistake never re-fires the impact sounds. A second GO within half a second is ignored.
 

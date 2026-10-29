@@ -34,6 +34,9 @@
   li kbd { width:18px; text-align:center; opacity:.7; }
   .sliders { display:grid; grid-template-columns:auto 1fr auto; gap:6px 10px; align-items:center; font-size:12px; color:var(--dim); }
   input[type=range] { width:100%; }
+  #pause { min-width:110px; font-weight:600; }
+  #pause.run { border-color:#7a6a1f; color:#f0d77a; }
+  #pause.held { background:#6b5a12; border-color:#d9b83a; color:#fff; }
   .hint { font-size:11px; white-space:nowrap; }
   input[type=time] { background:#1d1d23; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:4px 8px; font:inherit; width:130px; }
   .keys { font-size:12px; color:var(--dim); }
@@ -46,6 +49,7 @@
   <span id="projState" class="pill bad">Projector: closed</span>
   <span id="audioState" class="pill bad">Audio: press any key to arm</span>
   <span class="grow"></span>
+  <button id="pause">Start (P)</button>
   <button id="mute">Mute (M)</button>
 </header>
 <main>
@@ -147,7 +151,7 @@ function audio() {
     const n = noiseBuf.getChannelData(0); for (let i = 0; i < n.length; i++) n[i] = Math.random() * 2 - 1;
     applyVol();
   }
-  if (AC.state !== 'running') AC.resume();
+  if (AC.state !== 'running' && !paused) AC.resume();
   return AC;
 }
 function applyVol() { if (master) master.gain.setTargetAtTime(set.muted ? 0 : set.vol, AC.currentTime, 0.02); }
@@ -236,6 +240,17 @@ const sfx = {
 // ===== Clock state machine =====
 let cur = 0, cueAt = 0, lastGo = -1;
 let now = performance.now() / 1000, last = now;
+// Start/Pause: `now` is a virtual clock that stops while paused, so ticks, glitches, fades and the cue timer all freeze together.
+let paused = true, fresh = true, pausedAccum = 0, lastReal = now;
+function setPaused(p) {
+  if (!p) fresh = false;
+  if (p === paused) return;
+  paused = p;
+  if (AC) p ? AC.suspend() : AC.resume();       // freezes any rewind whoosh or drone mid-sound
+  if (!p && cur === 0) startTicker(1);          // first tick comes one second after pressing Start
+  ui();
+}
+const togglePause = () => setPaused(!paused);
 let disp = set.start, prevDisp = disp;    // clock-seconds shown on the face
 let sec = disp, tickAt = -1e9, nextTickAt = 0;  // ticker for NORMAL and PURPLE
 let rewT = 0, vel = 0, nextGlitch = 0, glitchUntil = 0, glitchSfx2 = 0, gl = 0, warpAmt = 0;
@@ -249,12 +264,13 @@ function enter(i, forward) {
   if (prev === 'REWIND') sfx.rewindStop();
   if (prev === 'FREEZE') sfx.droneStop(forward ? 0.8 : 0.1);
   cur = i; cueAt = now;
-  if (i === 0) disp = prevDisp = set.start;
+  if (i === 0) { disp = prevDisp = set.start; fresh = true; }
   if (next === 'REWIND') { rewT = 0; vel = 0; sfx.rewindStart(); }
   if (next === 'PURPLE') { startTicker(1 / CONFIG.slowFactor); nextGlitch = now + 1.5; if (forward) sfx.stopHit(); }
   if (next === 'NORMAL') { startTicker(1); if (forward && prev === 'FREEZE') sfx.release(); }
   if (next === 'FREEZE') { sfx.droneStart(); if (forward) sfx.freezeHit(); }
   if (isBlack(prev) || !forward) col.splice(0, 3, ...(CONFIG.colors[next] || col));   // no visible fade coming out of black
+  setPaused(i === 0);                                          // Cue 1 waits for Start; any later cue runs
   ui();
 }
 function go() {
@@ -267,6 +283,7 @@ const back = () => { if (cur > 0) enter(cur - 1, false); };
 function update(dt) {
   const s = CUES[cur].id;
   prevDisp = disp;
+  if (paused) { gl = 0; return; }
   if (s === 'NORMAL' || s === 'PURPLE') {
     const slow = s === 'PURPLE', P = slow ? 1 / CONFIG.slowFactor : 1, D = slow ? 0.32 : 0.08;
     if (now >= nextTickAt) {
@@ -419,11 +436,14 @@ function render() {
 let pending = false;
 function schedule() { if (pending) return; pending = true; ((popup && !popup.closed) ? popup : window).requestAnimationFrame(frame); }
 function frame() {
-  pending = false; now = performance.now() / 1000;
+  pending = false;
+  const real = performance.now() / 1000;
+  if (paused) pausedAccum += real - lastReal;
+  lastReal = real; now = real - pausedAccum;
   const dt = Math.min(0.1, now - last); last = now;
   update(dt); render(); tickUi(); schedule();
 }
-setInterval(() => { if (performance.now() / 1000 - last > 0.3) { pending = false; schedule(); } }, 250);
+setInterval(() => { if (performance.now() / 1000 - lastReal > 0.3) { pending = false; schedule(); } }, 250);
 
 // ===== Projector window =====
 function openProjector() {
@@ -450,6 +470,7 @@ function onKey(e) {
   if (['Space', 'ArrowRight', 'PageDown', 'Enter'].includes(e.code)) go();   // presentation clickers send PgDn/PgUp
   else if (['ArrowLeft', 'PageUp'].includes(e.code)) back();
   else if (/^Digit[1-8]$/.test(e.code)) enter(+e.code.slice(5) - 1, false);
+  else if (e.code === 'KeyP') togglePause();
   else if (e.code === 'KeyM') toggleMute();
   else hit = false;
   if (hit) e.preventDefault();
@@ -458,6 +479,7 @@ function toggleMute() { set.muted = !set.muted; save(); applyVol(); ui(); }
 document.addEventListener('keydown', onKey);
 document.addEventListener('pointerdown', () => audio());
 document.querySelectorAll('button').forEach(b => b.addEventListener('mousedown', e => e.preventDefault()));  // keep focus off buttons so Space never double-fires
+$('pause').onclick = () => { audio(); togglePause(); };
 $('go').onclick = () => { audio(); go(); };
 $('openProj').onclick = openProjector;
 $('mute').onclick = toggleMute;
@@ -475,11 +497,13 @@ function ui() {
   $('go').disabled = !n;
   [...list.children].forEach((li, i) => { li.className = i === cur ? 'cur' : i === cur + 1 ? 'next' : ''; });
   $('mute').textContent = set.muted ? 'Unmute (M)' : 'Mute (M)';
+  $('pause').textContent = !paused ? 'Pause (P)' : fresh ? 'Start (P)' : 'Resume (P)';
+  $('pause').className = !paused ? 'run' : fresh ? '' : 'held';
 }
 let lastUi = '';
 function tickUi() {
   const t = Math.max(0, now - cueAt), txt = `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
-  const open = popup && !popup.closed, a = AC && AC.state === 'running';
+  const open = popup && !popup.closed, a = AC && (AC.state === 'running' || paused);
   const key = txt + open + a + set.muted;
   if (key === lastUi) return; lastUi = key;
   $('timer').textContent = txt;
