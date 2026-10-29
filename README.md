@@ -3,7 +3,7 @@
 A cue-driven stage clock for theatre. One HTML file, no install, works offline.
 The operator presses GO at each cue; the clock projects to a second screen with synthesised sound.
 
-**Use it:** download `pax-clock.html`, open it in Chrome, click **Open projector window**, drag that window onto the projector and press `F` for fullscreen. Press any key once to arm the audio.
+**Use it:** open https://dandon21.github.io/pax-clock/ in Chrome (or download `pax-clock.html` and open it), click **Open projector window**, drag that window onto the projector and press `F` for fullscreen. Press any key once to arm the audio.
 
 ## Cues
 
