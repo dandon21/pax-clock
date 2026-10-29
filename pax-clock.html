@@ -279,21 +279,50 @@ function update(dt) {
 
 // ===== Drawing =====
 function line(g, a, r1, r2) { g.beginPath(); g.moveTo(Math.sin(a) * r1, -Math.cos(a) * r1); g.lineTo(Math.sin(a) * r2, -Math.cos(a) * r2); g.stroke(); }
+// The face (ring, ticks and glow) never moves, so it is drawn once in white and tinted per colour. Only the hands redraw each frame.
+
+const faceBase = new Map(), faceTint = new Map();
+function getFace(w, h, rgb) {
+  const k = `${w}x${h}|${set.size}|${set.x}|${set.y}`, tk = `${k}|${rgb[0] | 0},${rgb[1] | 0},${rgb[2] | 0}`;
+  let t = faceTint.get(tk); if (t) return t;
+  let base = faceBase.get(k);
+  if (!base) {
+    if (faceBase.size >= 3) faceBase.delete(faceBase.keys().next().value);
+    base = document.createElement('canvas'); base.width = w; base.height = h;
+    const g = base.getContext('2d'), R = Math.min(w, h) * 0.42 * set.size;
+    g.translate(w / 2 + set.x * w, h / 2 + set.y * h);
+    g.strokeStyle = g.shadowColor = '#fff'; g.shadowBlur = R * 0.06; g.lineCap = 'round';
+    g.lineWidth = R * 0.022; g.beginPath(); g.arc(0, 0, R, 0, TAU); g.stroke();
+    for (let i = 0; i < 60; i++) { const big = i % 5 === 0; g.lineWidth = R * (big ? 0.022 : 0.008); line(g, i / 60 * TAU, R * (big ? 0.82 : 0.89), R * 0.93); }
+    faceBase.set(k, base);
+  }
+  if (faceTint.size >= 6) faceTint.delete(faceTint.keys().next().value);
+  t = document.createElement('canvas'); t.width = w; t.height = h;
+  const g = t.getContext('2d'); g.drawImage(base, 0, 0);
+  g.globalCompositeOperation = 'source-atop'; g.fillStyle = `rgb(${rgb[0] | 0},${rgb[1] | 0},${rgb[2] | 0})`; g.fillRect(0, 0, w, h);
+  faceTint.set(tk, t); return t;
+}
+// Hand with a cheap glow: two wider, fainter strokes under the core (canvas shadowBlur is far too slow at projector size).
+function hand(g, a, r1, r2, lw) {
+  const ga = g.globalAlpha;
+  g.globalAlpha = ga * 0.04;
+  for (let k = 6; k >= 1; k--) { g.lineWidth = lw * (1 + 0.55 * k); line(g, a, r1, r2); }   // stacked layers fade out smoothly, no hard halo edge
+  g.globalAlpha = ga; g.lineWidth = lw; line(g, a, r1, r2);
+}
 function drawClock(g, w, h, rgb = col, ox = 0, jit = 0, clear = true) {
   const R = Math.min(w, h) * 0.42 * set.size, css = `rgb(${rgb[0] | 0},${rgb[1] | 0},${rgb[2] | 0})`, disp0 = disp + jit;
   if (clear) g.clearRect(0, 0, w, h);
+  g.drawImage(getFace(w, h, rgb), ox, 0);
   g.save(); g.translate(w / 2 + set.x * w + ox, h / 2 + set.y * h);
-  g.strokeStyle = g.fillStyle = g.shadowColor = css; g.shadowBlur = R * 0.06; g.lineCap = 'round';
-  g.lineWidth = R * 0.022; g.beginPath(); g.arc(0, 0, R, 0, TAU); g.stroke();
-  for (let i = 0; i < 60; i++) { const big = i % 5 === 0; g.lineWidth = R * (big ? 0.022 : 0.008); line(g, i / 60 * TAU, R * (big ? 0.82 : 0.89), R * 0.93); }
-  g.lineWidth = R * 0.05; line(g, disp0 / 43200 * TAU, -R * 0.08, R * 0.5);
-  g.lineWidth = R * 0.032; line(g, disp0 / 3600 * TAU, -R * 0.1, R * 0.74);
+  g.strokeStyle = g.fillStyle = css; g.lineCap = 'round';
+  hand(g, disp0 / 43200 * TAU, -R * 0.08, R * 0.5, R * 0.05);
+  hand(g, disp0 / 3600 * TAU, -R * 0.1, R * 0.74, R * 0.032);
   const a = disp0 / 60 * TAU, span = clamp((disp - prevDisp) / 60 * TAU, -5, 5);
-  g.lineWidth = R * 0.012;
   if (CUES[cur].id === 'REWIND' && Math.abs(span) > 0.05) {     // motion-blur trail at speed
+    g.lineWidth = R * 0.012;
     for (let j = 7; j >= 0; j--) { g.globalAlpha = 1 - j / 8; line(g, a - span * j / 8, -R * 0.15, R * 0.86); }
     g.globalAlpha = 1;
-  } else line(g, a, -R * 0.15, R * 0.86);
+  } else hand(g, a, -R * 0.15, R * 0.86, R * 0.012);
   g.beginPath(); g.arc(0, 0, R * 0.035, 0, TAU); g.fill();
   g.restore();
 }
@@ -352,13 +381,13 @@ let popup = null, proj = null;
 
 function render() {
   const black = isBlack(CUES[cur].id);
-  const targets = [[preview, devicePixelRatio]];
+  const targets = [[preview, 1]];                              // preview stays small; only the projector needs full resolution
   if (proj && !popup.closed) targets.push([proj, popup.devicePixelRatio]);
   for (const [t, dpr] of targets) {
     fit(t, dpr); if (!t.w) continue;
     if (!black) {
-      drawClock(t.og, t.w, t.h);
-      if (gl) {                                                  // tinted copies for the colour split, hands jittering with the glitch
+      if (!gl) drawClock(t.og, t.w, t.h);
+      else {                                                     // tinted copies for the colour split, hands jittering with the glitch
         drawClock(t.og, t.w, t.h, col, 0, rand(-3, 3) * gl, true);
         drawClock(t.cg, t.w, t.h, [40, 230, 255], 0, rand(-2, 2) * gl);
         drawClock(t.mg, t.w, t.h, [255, 40, 170], 0, rand(-2, 2) * gl);
