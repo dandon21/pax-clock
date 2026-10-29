@@ -16,7 +16,7 @@
   .pill.ok { color:#8fd19e; border-color:#2c5a39; }
   .pill.bad { color:#e39a8f; border-color:#6a3029; }
   main { display:grid; grid-template-columns:1.3fr 1fr; gap:14px; padding:14px; min-height:0; }
-  .col { display:flex; flex-direction:column; gap:12px; min-height:0; }
+  .col { display:flex; flex-direction:column; gap:12px; min-height:0; overflow-y:auto; }
   #preview { width:100%; aspect-ratio:16/9; background:#000; border:1px solid var(--line); border-radius:6px; display:block; }
   .box { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
   .label { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); }
@@ -34,6 +34,8 @@
   li kbd { width:18px; text-align:center; opacity:.7; }
   .sliders { display:grid; grid-template-columns:auto 1fr auto; gap:6px 10px; align-items:center; font-size:12px; color:var(--dim); }
   input[type=range] { width:100%; }
+  .hint { font-size:11px; white-space:nowrap; }
+  input[type=time] { background:#1d1d23; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:4px 8px; font:inherit; width:130px; }
   .keys { font-size:12px; color:var(--dim); }
   kbd { font:12px ui-monospace,monospace; }
 </style>
@@ -55,6 +57,7 @@
       <span>Move Y</span><input type="range" id="y" min="-0.4" max="0.4" step="0.005"><span id="yV"></span>
       <span>Brightness</span><input type="range" id="bright" min="0.1" max="1" step="0.01"><span id="brightV"></span>
       <span>SFX volume</span><input type="range" id="vol" min="0" max="1" step="0.01"><span id="volV"></span>
+      <span>Start time</span><input type="time" id="start" step="1"><span class="hint">applies at Cue 1</span>
     </div>
     <div class="keys">
       <kbd>Space</kbd> / <kbd>→</kbd> / <kbd>PgDn</kbd> GO &nbsp;·&nbsp; <kbd>←</kbd> / <kbd>PgUp</kbd> back (silent) &nbsp;·&nbsp;
@@ -111,7 +114,7 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const rand = (a, b) => a + Math.random() * (b - a);
 
 // ===== Settings saved per laptop (projector framing, volume) =====
-const set = { size:1, x:0, y:0, bright:1, vol:0.8, muted:false };
+const set = { size:1, x:0, y:0, bright:1, vol:0.8, muted:false, start:CONFIG.startTime };
 try { Object.assign(set, JSON.parse(localStorage.getItem('paxclock') || '{}')); } catch {}
 const save = () => { try { localStorage.setItem('paxclock', JSON.stringify(set)); } catch {} };
 for (const k of ['size', 'x', 'y', 'bright', 'vol']) {
@@ -119,6 +122,16 @@ for (const k of ['size', 'x', 'y', 'bright', 'vol']) {
   el.value = set[k]; $(k + 'V').textContent = (+set[k]).toFixed(2);
   el.addEventListener('input', () => { set[k] = +el.value; $(k + 'V').textContent = set[k].toFixed(2); save(); if (k === 'vol') applyVol(); });
 }
+
+// Start time: hh:mm:ss on the face, applied when Cue 1 begins (or immediately if the show is sitting on Cue 1)
+const hms = n => [n / 3600 | 0, (n / 60 | 0) % 60, n % 60].map(v => String(v).padStart(2, '0')).join(':');
+$('start').value = hms(set.start);
+$('start').addEventListener('change', e => {
+  const [h, m, sc = 0] = e.target.value.split(':').map(Number);
+  if (isNaN(h) || isNaN(m)) { e.target.value = hms(set.start); return; }
+  set.start = h * 3600 + m * 60 + sc; save();
+  if (cur === 0) { disp = prevDisp = set.start; startTicker(1); }
+});
 
 // ===== Sound: synthesised with Web Audio, no files needed =====
 let AC, master, verb, noiseBuf;
@@ -223,7 +236,7 @@ const sfx = {
 // ===== Clock state machine =====
 let cur = 0, cueAt = 0, lastGo = -1;
 let now = performance.now() / 1000, last = now;
-let disp = CONFIG.startTime, prevDisp = disp;    // clock-seconds shown on the face
+let disp = set.start, prevDisp = disp;    // clock-seconds shown on the face
 let sec = disp, tickAt = -1e9, nextTickAt = 0;  // ticker for NORMAL and PURPLE
 let rewT = 0, vel = 0, nextGlitch = 0, glitchUntil = 0, glitchSfx2 = 0, gl = 0, warpAmt = 0;
 const col = [...CONFIG.colors.NORMAL];
@@ -236,6 +249,7 @@ function enter(i, forward) {
   if (prev === 'REWIND') sfx.rewindStop();
   if (prev === 'FREEZE') sfx.droneStop(forward ? 0.8 : 0.1);
   cur = i; cueAt = now;
+  if (i === 0) disp = prevDisp = set.start;
   if (next === 'REWIND') { rewT = 0; vel = 0; sfx.rewindStart(); }
   if (next === 'PURPLE') { startTicker(1 / CONFIG.slowFactor); nextGlitch = now + 1.5; if (forward) sfx.stopHit(); }
   if (next === 'NORMAL') { startTicker(1); if (forward && prev === 'FREEZE') sfx.release(); }
