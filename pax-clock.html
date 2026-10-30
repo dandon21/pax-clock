@@ -85,8 +85,8 @@
 const CONFIG = {
   startTime: 10*3600 + 9*60 + 30,   // time on the face at curtain up (10:09:30)
   slowFactor: 0.4,                  // slow-mo ticks at 40% speed (60% slower): one tick every 2.5 s
-  rewindDoubleEvery: 1.6,           // rewind speed doubles every N seconds...
-  rewindMax: 300,                   // ...up to this many clock-seconds per real second
+  rewindDoubleEvery: 0.5,           // rewind speed doubles every N seconds...
+  rewindMax: 400000,                  // ...up to this many clock-seconds per real second
   colors: { NORMAL:[255,250,240], REWIND:[255,250,240], PURPLE:[178,118,255], FREEZE:[168,205,255] },
   colorFade: 0.25,                  // seconds for the colour shift into purple and blue
   glitch: { every:[0.5, 1.8],       // seconds between glitch bursts in the purple state (random in range)
