@@ -47,10 +47,8 @@
 <header>
   <button id="openProj">Open projector window</button>
   <span id="projState" class="pill bad">Projector: closed</span>
-  <span id="audioState" class="pill bad">Audio: press any key to arm</span>
   <span class="grow"></span>
   <button id="pause">Start (P)</button>
-  <button id="mute">Mute (M)</button>
 </header>
 <main>
   <div class="col">
@@ -60,12 +58,10 @@
       <span>Move X</span><input type="range" id="x" min="-0.4" max="0.4" step="0.005"><span id="xV"></span>
       <span>Move Y</span><input type="range" id="y" min="-0.4" max="0.4" step="0.005"><span id="yV"></span>
       <span>Brightness</span><input type="range" id="bright" min="0.1" max="1" step="0.01"><span id="brightV"></span>
-      <span>SFX volume</span><input type="range" id="vol" min="0" max="1" step="0.01"><span id="volV"></span>
       <span>Start time</span><input type="time" id="start" step="1"><span class="hint">applies at Cue 1</span>
     </div>
     <div class="keys">
-      <kbd>Space</kbd> / <kbd>→</kbd> / <kbd>PgDn</kbd> GO &nbsp;·&nbsp; <kbd>←</kbd> / <kbd>PgUp</kbd> back (silent) &nbsp;·&nbsp;
-      <kbd>1</kbd>–<kbd>8</kbd> jump to cue (silent) &nbsp;·&nbsp; <kbd>M</kbd> mute &nbsp;·&nbsp;
+      <kbd>Space</kbd> / <kbd>→</kbd> / <kbd>PgDn</kbd> GO &nbsp;·&nbsp; <kbd>←</kbd> / <kbd>PgUp</kbd> back &nbsp;·&nbsp;
       in projector window: double-click or <kbd>F</kbd> for fullscreen
     </div>
   </div>
@@ -98,13 +94,12 @@ const CONFIG = {
             micro:0.07,             // chance per frame of a tiny glitch between bursts (0 = none)
             strength:1 },           // overall glitch strength: 0.5 = subtler, 1.5 = heavier
   warp: { amp:0.02, ramp:0.3 },     // blue freeze waviness: amp = peak sideways shift as a share of screen height, ramp = seconds to fade in/out
-  sfx: { rewind:0.5, stopHit:0.8, slowTick:0.7, glitch:0.16, freezeHit:0.8, drone:0.22, release:0.35 },
 };
 // Cue sheet. Edit `note` with your script lines or lighting cue numbers.
 const CUES = [
-  { id:'NORMAL', name:'Pre-show · Normal',       note:'White, ticking clockwise, silent.' },
+  { id:'NORMAL', name:'Pre-show · Normal',       note:'White, ticking clockwise.' },
   { id:'REWIND', name:'Distortion 1 · Rewind',   note:'Spins anticlockwise and keeps speeding up. Press GO to stop it on the music.' },
-  { id:'PURPLE', name:'Distortion 1 · Slow-mo',  note:'Hard stop. Purple with glitching, ticking 60% slower with sound.' },
+  { id:'PURPLE', name:'Distortion 1 · Slow-mo',  note:'Hard stop. Purple with glitching, ticking 60% slower.' },
   { id:'BLACK',  name:'Blackout 1',              note:'Projector goes black. Press with the lighting blackout.' },
   { id:'NORMAL', name:'Lights up · Normal',      note:'Back to the default clock. Press with the lights-up cue.' },
   { id:'FREEZE', name:'Distortion 2 · Freeze',   note:'Stops dead with a blue tint, wavy warp and a drone.' },
@@ -117,14 +112,14 @@ const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const rand = (a, b) => a + Math.random() * (b - a);
 
-// ===== Settings saved per laptop (projector framing, volume) =====
-const set = { size:1, x:0, y:0, bright:1, vol:0.8, muted:false, start:CONFIG.startTime };
+// ===== Settings saved per laptop (projector framing) =====
+const set = { size:1, x:0, y:0, bright:1, start:CONFIG.startTime };
 try { Object.assign(set, JSON.parse(localStorage.getItem('paxclock') || '{}')); } catch {}
 const save = () => { try { localStorage.setItem('paxclock', JSON.stringify(set)); } catch {} };
-for (const k of ['size', 'x', 'y', 'bright', 'vol']) {
+for (const k of ['size', 'x', 'y', 'bright']) {
   const el = $(k);
   el.value = set[k]; $(k + 'V').textContent = (+set[k]).toFixed(2);
-  el.addEventListener('input', () => { set[k] = +el.value; $(k + 'V').textContent = set[k].toFixed(2); save(); if (k === 'vol') applyVol(); });
+  el.addEventListener('input', () => { set[k] = +el.value; $(k + 'V').textContent = set[k].toFixed(2); save(); });
 }
 
 // Start time: hh:mm:ss on the face, applied when Cue 1 begins (or immediately if the show is sitting on Cue 1)
@@ -137,106 +132,6 @@ $('start').addEventListener('change', e => {
   if (cur === 0) { disp = prevDisp = set.start; startTicker(1); }
 });
 
-// ===== Sound: synthesised with Web Audio, no files needed =====
-let AC, master, verb, noiseBuf;
-function audio() {
-  if (!AC) {
-    AC = new (window.AudioContext || window.webkitAudioContext)();
-    master = AC.createGain(); master.connect(AC.destination);
-    verb = AC.createConvolver();
-    const len = AC.sampleRate * 3, ir = AC.createBuffer(2, len, AC.sampleRate);
-    for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
-    verb.buffer = ir; verb.connect(master);
-    noiseBuf = AC.createBuffer(1, AC.sampleRate * 2, AC.sampleRate);
-    const n = noiseBuf.getChannelData(0); for (let i = 0; i < n.length; i++) n[i] = Math.random() * 2 - 1;
-    applyVol();
-  }
-  if (AC.state !== 'running' && !paused) AC.resume();
-  return AC;
-}
-function applyVol() { if (master) master.gain.setTargetAtTime(set.muted ? 0 : set.vol, AC.currentTime, 0.02); }
-const gainNode = v => { const g = AC.createGain(); g.gain.value = v; return g; };
-const osc = (type, f) => { const o = AC.createOscillator(); o.type = type; o.frequency.value = f; return o; };
-const filt = (type, f, q = 1) => { const b = AC.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = q; return b; };
-const noise = (loop = false) => { const s = AC.createBufferSource(); s.buffer = noiseBuf; s.loop = loop; return s; };
-function env(g, t, peak, a, d) { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + a + d); }
-function out(node, wet) { node.connect(master); if (wet) node.connect(gainNode(wet)).connect(verb); }
-function shot(src, chain, t, dur) { src.connect(chain); src.start(t); src.stop(t + dur); }
-
-let rw = null, drone = null;
-const sfx = {
-  slowTick(alt) {
-    const v = CONFIG.sfx.slowTick; if (!AC || !v) return; const t = AC.currentTime;
-    const o = osc('triangle', alt ? 150 : 124); o.frequency.exponentialRampToValueAtTime(alt ? 68 : 58, t + 0.6);
-    const g = AC.createGain(); env(g, t, v, 0.003, 0.8); out(g, 0.55); shot(o, g, t, 0.9);
-    const bp = filt('bandpass', alt ? 2300 : 1800, 3), g2 = AC.createGain(); env(g2, t, v * 0.9, 0.001, 0.07);
-    bp.connect(g2); out(g2, 0.45); shot(noise(), bp, t, 0.12);
-  },
-  rewindStart() {
-    const v = CONFIG.sfx.rewind; if (!AC || !v || rw) return;
-    const n = noise(true), bp = filt('bandpass', 300, 1.4), ng = gainNode(0);
-    n.connect(bp).connect(ng); out(ng, 0.2);
-    const r = osc('sawtooth', 1), hp = filt('highpass', 1500), rg = gainNode(0);   // ratchet: one click per second-mark passed
-    r.connect(hp).connect(rg); out(rg, 0.15);
-    n.start(); r.start(); rw = { n, r, bp, ng, rg, v };
-  },
-  rewindUpdate(speed) {
-    if (!rw) return; const t = AC.currentTime, s = clamp(Math.log2(Math.max(speed, 1)) / Math.log2(CONFIG.rewindMax), 0, 1);
-    rw.bp.frequency.setTargetAtTime(300 + 5000 * s * s, t, 0.05);
-    rw.ng.gain.setTargetAtTime(rw.v * (0.08 + 0.6 * s), t, 0.05);
-    rw.r.frequency.setTargetAtTime(Math.max(speed, 1), t, 0.05);
-    rw.rg.gain.setTargetAtTime(rw.v * 0.5, t, 0.05);
-  },
-  rewindStop() {
-    if (!rw) return; const t = AC.currentTime;
-    for (const g of [rw.ng, rw.rg]) { g.gain.cancelScheduledValues(t); g.gain.setTargetAtTime(0, t, 0.008); }
-    rw.n.stop(t + 0.1); rw.r.stop(t + 0.1); rw = null;
-  },
-  stopHit() {
-    const v = CONFIG.sfx.stopHit; if (!AC || !v) return; const t = AC.currentTime;
-    const o = osc('sine', 120); o.frequency.exponentialRampToValueAtTime(38, t + 0.5);
-    const g = AC.createGain(); env(g, t, v, 0.002, 1.1); out(g, 0.6); shot(o, g, t, 1.3);
-    const lp = filt('lowpass', 900), g2 = AC.createGain(); env(g2, t, v * 0.7, 0.001, 0.18);
-    lp.connect(g2); out(g2, 0.6); shot(noise(), lp, t, 0.25);
-  },
-  glitch() {
-    const v = CONFIG.sfx.glitch; if (!AC || !v) return; let t = AC.currentTime;
-    for (let i = 0, n = 2 + (Math.random() * 3 | 0); i < n; i++) {
-      const d = rand(0.012, 0.04), o = osc('square', rand(500, 4000)), g = AC.createGain();
-      env(g, t, v, 0.001, d); out(g, 0.1); shot(o, g, t, d + 0.02); t += d + rand(0, 0.03);
-    }
-  },
-  freezeHit() {
-    const v = CONFIG.sfx.freezeHit; if (!AC || !v) return; const t = AC.currentTime;
-    const o = osc('sine', 70); o.frequency.exponentialRampToValueAtTime(34, t + 1.4);
-    const g = AC.createGain(); env(g, t, v, 0.003, 1.8); out(g, 0.4); shot(o, g, t, 2);
-    const hp = filt('highpass', 3000), g2 = AC.createGain(); env(g2, t, v * 0.5, 0.001, 0.3);
-    hp.connect(g2); out(g2, 0.8); shot(noise(), hp, t, 0.35);
-    for (const f of [1046, 1318, 1568, 2093]) {
-      const s = osc('sine', f * rand(0.997, 1.003)), gs = AC.createGain(); env(gs, t, v * 0.09, 0.01, 3.5);
-      out(gs, 0.9); shot(s, gs, t, 3.6);
-    }
-  },
-  droneStart() {
-    const v = CONFIG.sfx.drone; if (!AC || !v || drone) return; const t = AC.currentTime;
-    const lp = filt('lowpass', 800), g = gainNode(0); lp.connect(g); out(g, 0.5);
-    const oscs = [osc('sine', 110), osc('sine', 110.7), osc('triangle', 220.4)];
-    oscs.forEach(o => { o.connect(lp); o.start(t); });
-    g.gain.setTargetAtTime(v, t, 0.4); drone = { g, oscs };
-  },
-  droneStop(fade) {
-    if (!drone) return; const t = AC.currentTime;
-    drone.g.gain.cancelScheduledValues(t); drone.g.gain.setTargetAtTime(0, t, fade / 3);
-    drone.oscs.forEach(o => o.stop(t + fade + 0.2)); drone = null;
-  },
-  release() {
-    const v = CONFIG.sfx.release; if (!AC || !v) return; const t = AC.currentTime;
-    const bp = filt('bandpass', 3000, 2), g = AC.createGain();
-    bp.frequency.exponentialRampToValueAtTime(300, t + 0.6); env(g, t, v, 0.35, 0.35);
-    bp.connect(g); out(g, 0.5); shot(noise(), bp, t, 0.8);
-  },
-};
-
 // ===== Clock state machine =====
 let cur = 0, cueAt = 0, lastGo = -1;
 let now = performance.now() / 1000, last = now;
@@ -246,14 +141,13 @@ function setPaused(p) {
   if (!p) fresh = false;
   if (p === paused) return;
   paused = p;
-  if (AC) p ? AC.suspend() : AC.resume();       // freezes any rewind whoosh or drone mid-sound
   if (!p && cur === 0) startTicker(1);          // first tick comes one second after pressing Start
   ui();
 }
 const togglePause = () => setPaused(!paused);
 let disp = set.start, prevDisp = disp;    // clock-seconds shown on the face
 let sec = disp, tickAt = -1e9, nextTickAt = 0;  // ticker for NORMAL and PURPLE
-let rewT = 0, vel = 0, nextGlitch = 0, glitchUntil = 0, glitchSfx2 = 0, gl = 0, warpAmt = 0;
+let rewT = 0, vel = 0, nextGlitch = 0, glitchUntil = 0, gl = 0, warpAmt = 0;
 const col = [...CONFIG.colors.NORMAL];
 const isBlack = id => id === 'BLACK' || id === 'GONE';
 
@@ -261,14 +155,11 @@ function startTicker(period) { sec = Math.round(disp); tickAt = -1e9; nextTickAt
 
 function enter(i, forward) {
   const prev = CUES[cur].id, next = CUES[i].id;
-  if (prev === 'REWIND') sfx.rewindStop();
-  if (prev === 'FREEZE') sfx.droneStop(forward ? 0.8 : 0.1);
   cur = i; cueAt = now;
   if (i === 0) { disp = prevDisp = set.start; fresh = true; }
-  if (next === 'REWIND') { rewT = 0; vel = 0; sfx.rewindStart(); }
-  if (next === 'PURPLE') { startTicker(1 / CONFIG.slowFactor); nextGlitch = now + 1.5; if (forward) sfx.stopHit(); }
-  if (next === 'NORMAL') { startTicker(1); if (forward && prev === 'FREEZE') sfx.release(); }
-  if (next === 'FREEZE') { sfx.droneStart(); if (forward) sfx.freezeHit(); }
+  if (next === 'REWIND') { rewT = 0; vel = 0; }
+  if (next === 'PURPLE') { startTicker(1 / CONFIG.slowFactor); nextGlitch = now + 1.5; }
+  if (next === 'NORMAL') { startTicker(1); }
   if (isBlack(prev) || !forward) col.splice(0, 3, ...(CONFIG.colors[next] || col));   // no visible fade coming out of black
   setPaused(i === 0);                                          // Cue 1 waits for Start; any later cue runs
   ui();
@@ -288,19 +179,16 @@ function update(dt) {
     const slow = s === 'PURPLE', P = slow ? 1 / CONFIG.slowFactor : 1, D = slow ? 0.32 : 0.08;
     if (now >= nextTickAt) {
       sec++; tickAt = now; nextTickAt += P; if (nextTickAt < now) nextTickAt = now + P;
-      if (slow) sfx.slowTick(sec % 2);
     }
     const k = clamp((now - tickAt) / D, 0, 1), c = slow ? 2.2 : 1.4;   // ease-out with a little overshoot
     disp = sec + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2);   // = sec - 1 at k=0, sec at k=1
     if (slow && now >= nextGlitch) {
       const G = CONFIG.glitch; glitchUntil = now + rand(...G.length); nextGlitch = glitchUntil + rand(...G.every);
-      sfx.glitch(); glitchSfx2 = glitchUntil - now > 0.25 ? now + 0.12 : 0;
     }
-    if (glitchSfx2 && now >= glitchSfx2) { glitchSfx2 = 0; sfx.glitch(); }
     gl = !slow ? 0 : now < glitchUntil ? rand(0.5, 1) : Math.random() < CONFIG.glitch.micro ? rand(0.12, 0.35) : 0;   // re-rolled every frame so bursts stutter
   } else if (s === 'REWIND') {
     rewT += dt; vel = -Math.min(CONFIG.rewindMax, Math.pow(2, rewT / CONFIG.rewindDoubleEvery));
-    disp += vel * dt; sfx.rewindUpdate(-vel);
+    disp += vel * dt;
   }
   if (s !== 'PURPLE') gl = 0;
   warpAmt += ((s === 'FREEZE' ? 1 : 0) - warpAmt) * (1 - Math.exp(-dt / (CONFIG.warp.ramp / 3)));
@@ -466,29 +354,24 @@ function openProjector() {
 // ===== Operator UI =====
 function onKey(e) {
   if (e.repeat || e.metaKey || e.ctrlKey) return;
-  audio(); let hit = true;
+  let hit = true;
   if (['Space', 'ArrowRight', 'PageDown', 'Enter'].includes(e.code)) go();   // presentation clickers send PgDn/PgUp
   else if (['ArrowLeft', 'PageUp'].includes(e.code)) back();
-  else if (/^Digit[1-8]$/.test(e.code)) enter(+e.code.slice(5) - 1, false);
   else if (e.code === 'KeyP') togglePause();
-  else if (e.code === 'KeyM') toggleMute();
   else hit = false;
   if (hit) e.preventDefault();
 }
-function toggleMute() { set.muted = !set.muted; save(); applyVol(); ui(); }
 document.addEventListener('keydown', onKey);
-document.addEventListener('pointerdown', () => audio());
 document.querySelectorAll('button').forEach(b => b.addEventListener('mousedown', e => e.preventDefault()));  // keep focus off buttons so Space never double-fires
-$('pause').onclick = () => { audio(); togglePause(); };
-$('go').onclick = () => { audio(); go(); };
+$('pause').onclick = togglePause;
+$('go').onclick = go;
 $('openProj').onclick = openProjector;
-$('mute').onclick = toggleMute;
 navigator.wakeLock?.request('screen').catch(() => {});
 
 const list = $('list');
 CUES.forEach((c, i) => {
   const li = document.createElement('li'); li.innerHTML = `<kbd>${i + 1}</kbd><span>${c.name}</span>`;
-  li.onclick = () => { audio(); enter(i, false); }; list.appendChild(li);
+  li.onclick = () => { enter(i, false); }; list.appendChild(li);
 });
 function ui() {
   const c = CUES[cur], n = CUES[cur + 1];
@@ -496,20 +379,17 @@ function ui() {
   $('next').textContent = n ? n.name : 'End of cues'; $('nextNote').textContent = n ? n.note : '';
   $('go').disabled = !n;
   [...list.children].forEach((li, i) => { li.className = i === cur ? 'cur' : i === cur + 1 ? 'next' : ''; });
-  $('mute').textContent = set.muted ? 'Unmute (M)' : 'Mute (M)';
   $('pause').textContent = !paused ? 'Pause (P)' : fresh ? 'Start (P)' : 'Resume (P)';
   $('pause').className = !paused ? 'run' : fresh ? '' : 'held';
 }
 let lastUi = '';
 function tickUi() {
   const t = Math.max(0, now - cueAt), txt = `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
-  const open = popup && !popup.closed, a = AC && (AC.state === 'running' || paused);
-  const key = txt + open + a + set.muted;
+  const open = popup && !popup.closed;
+  const key = txt + open;
   if (key === lastUi) return; lastUi = key;
   $('timer').textContent = txt;
   $('projState').textContent = open ? 'Projector: open' : 'Projector: closed'; $('projState').className = 'pill ' + (open ? 'ok' : 'bad');
-  $('audioState').textContent = !a ? 'Audio: press any key to arm' : set.muted ? 'Audio: MUTED' : 'Audio: armed';
-  $('audioState').className = 'pill ' + (a && !set.muted ? 'ok' : 'bad');
 }
 ui(); schedule();
 </script>
