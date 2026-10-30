@@ -85,8 +85,8 @@
 const CONFIG = {
   startTime: 10*3600 + 9*60 + 30,   // time on the face at curtain up (10:09:30)
   slowFactor: 0.4,                  // slow-mo ticks at 40% speed (60% slower): one tick every 2.5 s
-  rewindDoubleEvery: 0.5,           // rewind speed doubles every N seconds...
-  rewindMax: 400000,                  // ...up to this many clock-seconds per real second
+  rewindMax: 400000,                // top rewind speed, in clock-seconds per real second...
+  rewindRamp: 60,                   // ...reached exactly this many seconds after the rewind starts (speed grows smoothly from 1x)
   colors: { NORMAL:[255,250,240], REWIND:[255,250,240], PURPLE:[178,118,255], FREEZE:[168,205,255] },
   colorFade: 0.25,                  // seconds for the colour shift into purple and blue
   glitch: { every:[0.5, 1.8],       // seconds between glitch bursts in the purple state (random in range)
@@ -187,7 +187,7 @@ function update(dt) {
     }
     gl = !slow ? 0 : now < glitchUntil ? rand(0.5, 1) : Math.random() < CONFIG.glitch.micro ? rand(0.12, 0.35) : 0;   // re-rolled every frame so bursts stutter
   } else if (s === 'REWIND') {
-    rewT += dt; vel = -Math.min(CONFIG.rewindMax, Math.pow(2, rewT / CONFIG.rewindDoubleEvery));
+    rewT = now - cueAt; vel = -Math.pow(CONFIG.rewindMax, Math.min(1, rewT / CONFIG.rewindRamp));
     disp += vel * dt;
   }
   if (s !== 'PURPLE') gl = 0;
